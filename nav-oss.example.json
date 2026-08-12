@@ -1,0 +1,10 @@
+{
+  "apiAddr": "127.0.0.1:9000",
+  "consoleAddr": "127.0.0.1:9001",
+  "stateFile": "./data/nav-oss-state.json",
+  "runtimeDir": "./data/runtimes",
+  "auth": {
+    "username": "admin",
+    "sessionTTLMinutes": 1440
+  }
+}

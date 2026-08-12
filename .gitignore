@@ -1,0 +1,7 @@
+/coverage.out
+/coverage.html
+/*.test
+/.idea/
+/.vscode/
+.DS_Store
+data/
