@@ -105,8 +105,8 @@ func newHTTPServer(address string, handler http.Handler) *http.Server {
 		Addr:              address,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      2 * time.Minute,
+		ReadTimeout:       10 * time.Minute,
+		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
 	}
 }

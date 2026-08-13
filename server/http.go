@@ -5,12 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 const apiPrefix = "/api/v1"
+
+const (
+	maxConsoleUploadBytes = int64(1 << 30)
+	maxUploadMemory       = int64(32 << 20)
+	maxMultipartOverhead  = int64(1 << 20)
+)
 
 type apiResponse struct {
 	Code int    `json:"code"`
@@ -97,6 +105,8 @@ func (s *Service) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleProvider(writer, request, strings.TrimPrefix(path, apiPrefix+"/providers/"))
 	case path == apiPrefix+"/objects":
 		s.handleObjects(writer, request)
+	case path == apiPrefix+"/objects/upload":
+		s.handleObjectUpload(writer, request)
 	case path == apiPrefix+"/objects/stat":
 		s.handleObjectStat(writer, request)
 	case path == apiPrefix+"/objects/content":
@@ -249,7 +259,16 @@ func (s *Service) handleObjects(writer http.ResponseWriter, request *http.Reques
 	case http.MethodGet:
 		page, size := pageQuery(request)
 		query := request.URL.Query()
-		result, err := s.listObjects(request.Context(), query.Get("providerId"), query.Get("prefix"), query.Get("keyword"), page, size)
+		result, err := s.listObjects(
+			request.Context(),
+			query.Get("providerId"),
+			query.Get("prefix"),
+			query.Get("keyword"),
+			query.Get("sortBy"),
+			query.Get("sortOrder"),
+			page,
+			size,
+		)
 		if err != nil {
 			writeAppError(writer, err)
 			return
@@ -272,6 +291,75 @@ func (s *Service) handleObjects(writer http.ResponseWriter, request *http.Reques
 	default:
 		writeMethodNotAllowed(writer, http.MethodGet, http.MethodDelete)
 	}
+}
+
+func (s *Service) handleObjectUpload(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writeMethodNotAllowed(writer, http.MethodPost)
+		return
+	}
+
+	request.Body = http.MaxBytesReader(
+		writer,
+		request.Body,
+		maxConsoleUploadBytes+maxMultipartOverhead,
+	)
+	if err := request.ParseMultipartForm(maxUploadMemory); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			writeJSON(writer, http.StatusRequestEntityTooLarge, apiResponse{
+				Code: http.StatusRequestEntityTooLarge,
+				Msg:  "文件大小不能超过 1 GiB",
+				Data: nil,
+			})
+			return
+		}
+		writeAppError(writer, fmt.Errorf("解析上传文件失败: %w", err))
+		return
+	}
+	if request.MultipartForm != nil {
+		defer request.MultipartForm.RemoveAll()
+	}
+
+	file, header, err := request.FormFile("file")
+	if err != nil {
+		writeAppError(writer, errors.New("请选择要上传的文件"))
+		return
+	}
+	defer file.Close()
+
+	key := strings.TrimSpace(request.FormValue("key"))
+	if key == "" {
+		key = filepath.Base(header.Filename)
+	}
+	if key == "." || key == "" {
+		writeAppError(writer, errors.New("对象 Key 不能为空"))
+		return
+	}
+
+	contentType := strings.TrimSpace(request.FormValue("contentType"))
+	if contentType == "" {
+		contentType = strings.TrimSpace(header.Header.Get("Content-Type"))
+	}
+	if contentType == "" || contentType == "application/octet-stream" {
+		if inferred := mime.TypeByExtension(filepath.Ext(key)); inferred != "" {
+			contentType = inferred
+		}
+	}
+
+	object, err := s.putObject(
+		request.Context(),
+		strings.TrimSpace(request.FormValue("providerId")),
+		key,
+		file,
+		header.Size,
+		contentType,
+	)
+	if err != nil {
+		writeAppError(writer, err)
+		return
+	}
+	writeSuccess(writer, object)
 }
 
 func (s *Service) handleObjectStat(writer http.ResponseWriter, request *http.Request) {

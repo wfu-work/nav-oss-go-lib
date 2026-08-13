@@ -77,7 +77,6 @@ type Settings struct {
 	ListPageSize              int    `json:"listPageSize"`
 	MaxListPageSize           int    `json:"maxListPageSize"`
 	RequireDeleteConfirmation bool   `json:"requireDeleteConfirmation"`
-	AllowAnonymousPresign     bool   `json:"allowAnonymousPresign"`
 }
 
 // Operation records a management action initiated through the console API.
@@ -98,6 +97,7 @@ type SystemInfo struct {
 	Service              string    `json:"service"`
 	Version              string    `json:"version"`
 	GoVersion            string    `json:"goVersion"`
+	Host                 HostInfo  `json:"host"`
 	APIAddress           string    `json:"apiAddress"`
 	ConsoleAddress       string    `json:"consoleAddress"`
 	RuntimeDir           string    `json:"runtimeDir"`
@@ -108,6 +108,27 @@ type SystemInfo struct {
 	EnabledProviderCount int       `json:"enabledProviderCount"`
 	HealthyProviderCount int       `json:"healthyProviderCount"`
 	CurrentSessionCount  int       `json:"currentSessionCount"`
+}
+
+// HostInfo describes the operating system and hardware visible to nav-oss.
+// It intentionally omits host names, mount paths and other environment details.
+type HostInfo struct {
+	OperatingSystem      string  `json:"operatingSystem"`
+	Platform             string  `json:"platform"`
+	PlatformVersion      string  `json:"platformVersion"`
+	KernelVersion        string  `json:"kernelVersion"`
+	Architecture         string  `json:"architecture"`
+	CPUModel             string  `json:"cpuModel"`
+	CPUPhysicalCores     int     `json:"cpuPhysicalCores"`
+	CPULogicalCores      int     `json:"cpuLogicalCores"`
+	MemoryTotalBytes     uint64  `json:"memoryTotalBytes"`
+	MemoryUsedBytes      uint64  `json:"memoryUsedBytes"`
+	MemoryAvailableBytes uint64  `json:"memoryAvailableBytes"`
+	MemoryUsedPercent    float64 `json:"memoryUsedPercent"`
+	DiskTotalBytes       uint64  `json:"diskTotalBytes"`
+	DiskUsedBytes        uint64  `json:"diskUsedBytes"`
+	DiskAvailableBytes   uint64  `json:"diskAvailableBytes"`
+	DiskUsedPercent      float64 `json:"diskUsedPercent"`
 }
 
 // RuntimeCatalogItem describes an object-storage binary that the management

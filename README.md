@@ -55,7 +55,7 @@ go get github.com/wfu-work/nav-oss-go-lib@latest
 
 项目要求 Go `1.26` 或更高版本。
 
-## 快速开始
+## Go SDK 接入
 
 ### 本地文件系统
 
@@ -152,7 +152,7 @@ export AWS_SESSION_TOKEN="your-session-token" # 可选
 
 ## 内置控制台
 
-项目已将 `nav-oss-lib-web` 的生产制品嵌入可选的 `webs` 包，并在 `server` 包中提供独立的管理 API。内置启动命令使用两个端口：
+项目已将 `nav-oss-lib-web` 的生产制品嵌入可选的 `webs` 包，并在 `server` 包中提供独立的控制台内部管理 API。内置启动命令使用两个端口：
 
 - `127.0.0.1:9000`：nav-oss 管理 REST API；
 - `127.0.0.1:9001`：项目展示站与管理控制台。
@@ -228,7 +228,9 @@ go run ./cmd/nav-oss-web -config ./nav-oss.json
 
 管理 API 不接受任意下载 URL、可执行路径或启动参数，避免管理端被用作远程命令执行入口。运行目录默认位于状态文件旁的 `runtimes/`，可通过 `runtimeDir`、`NAV_OSS_RUNTIME_DIR` 或 `-runtime-dir` 修改。若需要让其他主机直接访问新安装的 S3 服务，应在受控的反向代理或防火墙策略下显式开放端口；一键安装默认不会监听所有网卡。
 
-### API 路径
+### 控制台内部 API
+
+`/api/v1` 用于内置控制台的管理操作，不作为业务项目的公共集成契约，也不承诺独立的客户端兼容性。业务项目应直接使用上面的 Go SDK；如果需要向其他语言或外部系统提供能力，应由宿主应用基于自身认证与权限模型封装接口。
 
 管理接口统一位于 `/api/v1`：
 
@@ -237,11 +239,11 @@ go run ./cmd/nav-oss-web -config ./nav-oss.json
 - `/api/v1/runtimes/catalog`：当前操作系统与架构可安装的软件目录；
 - `/api/v1/installations`：创建和查询软件安装任务；
 - `/api/v1/installations/{id}/{start|stop|restart|retry}`：控制已管理实例的生命周期；
-- `/api/v1/objects`：对象查询、详情、复制、移动、删除和临时签名；
+- `/api/v1/objects`：对象查询、详情、上传、复制、移动、删除和临时签名；
 - `/api/v1/dashboard`：存储规模、健康状态和近期操作概览；
 - `/api/v1/multipart`：当前 Provider 可枚举的 Multipart 会话；
 - `/api/v1/operations`：最近的管理操作；
-- `/api/v1/system`：版本、监听地址、运行时间和会话配置等脱敏信息；
+- `/api/v1/system`：服务版本、系统架构、CPU、内存、应用数据磁盘和运行配置等脱敏信息；
 - `/api/v1/settings`：默认 Provider、分页和临时签名策略。
 
 底层 `Store` 接口暂时没有枚举全部 Multipart 会话的能力，因此 `/api/v1/multipart` 当前返回真实空集合，不使用演示数据。

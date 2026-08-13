@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -23,9 +25,10 @@ import (
 )
 
 const (
-	maxOperationRecords  = 500
-	defaultAdminUsername = "admin"
-	defaultAdminPassword = "navfirst.com"
+	maxOperationRecords      = 500
+	contentTypeLookupWorkers = 8
+	defaultAdminUsername     = "admin"
+	defaultAdminPassword     = "navfirst.com"
 )
 
 // Service owns console authentication, provider configuration and live stores.
@@ -616,7 +619,7 @@ func (s *Service) resolveProviderLocked(id string) (*providerState, oss.Store, e
 	return provider, store, nil
 }
 
-func (s *Service) listObjects(ctx context.Context, providerID, prefix, keyword string, page, size int) (pageResult[storedObject], error) {
+func (s *Service) listObjects(ctx context.Context, providerID, prefix, keyword, sortBy, sortOrder string, page, size int) (pageResult[storedObject], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	provider, store, err := s.resolveProviderLocked(providerID)
@@ -651,11 +654,123 @@ func (s *Service) listObjects(ctx context.Context, providerID, prefix, keyword s
 	provider.ObjectCount = objectCount
 	provider.UsedBytes = usedBytes
 	provider.UpdatedAt = time.Now().UTC()
+	sortStoredObjects(items, sortBy, sortOrder)
 	pageValue := paginate(items, page, size)
+	hydrateMissingContentTypes(ctx, store, pageValue.Data)
 	pageValue.NextCursor = result.NextCursor
 	pageValue.HasMore = result.HasMore || pageValue.HasMore
 	_ = s.persistLocked()
 	return pageValue, nil
+}
+
+func normalizeObjectSortField(value string) string {
+	switch strings.TrimSpace(value) {
+	case "key", "size", "contentType", "updatedAt":
+		return strings.TrimSpace(value)
+	default:
+		return "updatedAt"
+	}
+}
+
+func sortStoredObjects(items []storedObject, sortBy, sortOrder string) {
+	field := normalizeObjectSortField(sortBy)
+	descending := !strings.EqualFold(strings.TrimSpace(sortOrder), "asc")
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := items[i], items[j]
+		comparison := 0
+		switch field {
+		case "key":
+			comparison = strings.Compare(strings.ToLower(left.Key), strings.ToLower(right.Key))
+		case "size":
+			comparison = compareInt64(left.Size, right.Size)
+		case "contentType":
+			comparison = strings.Compare(objectSortType(left), objectSortType(right))
+		default:
+			comparison = left.UpdatedAt.Compare(right.UpdatedAt)
+		}
+		if comparison == 0 {
+			comparison = strings.Compare(strings.ToLower(left.Key), strings.ToLower(right.Key))
+		}
+		if descending {
+			return comparison > 0
+		}
+		return comparison < 0
+	})
+}
+
+// Type sorting follows the file extension users see in the object Key. Many
+// S3 clients store binary files as application/octet-stream, so sorting by the
+// raw MIME value alone makes visually different files appear unsorted.
+func objectSortType(item storedObject) string {
+	extension := strings.ToLower(path.Ext(strings.TrimSpace(item.Key)))
+	if extension != "" {
+		return extension
+	}
+	contentType := strings.ToLower(strings.TrimSpace(item.ContentType))
+	if contentType == "" || contentType == "application/octet-stream" {
+		return "\uffff"
+	}
+	if extensions, err := mime.ExtensionsByType(contentType); err == nil && len(extensions) > 0 {
+		return strings.ToLower(extensions[0])
+	}
+	return contentType
+}
+
+func compareInt64(left, right int64) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// S3-compatible list responses do not include the standard Content-Type
+// header. Resolve it from HEAD only for missing objects on the requested page,
+// keeping the list responsive while returning the real stored MIME type.
+type objectStatter interface {
+	Stat(context.Context, string) (oss.ObjectInfo, error)
+}
+
+func hydrateMissingContentTypes(ctx context.Context, store objectStatter, items []storedObject) {
+	indexes := make([]int, 0, len(items))
+	for index := range items {
+		if !items[index].IsPrefix && strings.TrimSpace(items[index].ContentType) == "" {
+			indexes = append(indexes, index)
+		}
+	}
+	if len(indexes) == 0 {
+		return
+	}
+
+	workerCount := min(contentTypeLookupWorkers, len(indexes))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				info, err := store.Stat(ctx, items[index].Key)
+				if err == nil {
+					items[index].ContentType = strings.TrimSpace(info.ContentType)
+				}
+			}
+		}()
+	}
+
+sendJobs:
+	for _, index := range indexes {
+		select {
+		case jobs <- index:
+		case <-ctx.Done():
+			break sendJobs
+		}
+	}
+	close(jobs)
+	workers.Wait()
 }
 
 func (s *Service) statObject(ctx context.Context, providerID, key string) (objectDetail, error) {
@@ -673,6 +788,40 @@ func (s *Service) statObject(ctx context.Context, providerID, key string) (objec
 		return objectDetail{}, err
 	}
 	return mapObjectDetail(*provider, info), nil
+}
+
+func (s *Service) putObject(
+	ctx context.Context,
+	providerID string,
+	key string,
+	reader io.Reader,
+	size int64,
+	contentType string,
+) (storedObject, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return storedObject{}, errors.New("对象 Key 不能为空")
+	}
+	if reader == nil {
+		return storedObject{}, errors.New("请选择要上传的文件")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	provider, store, err := s.resolveProviderLocked(providerID)
+	if err != nil {
+		return storedObject{}, err
+	}
+	started := time.Now()
+	info, err := store.Put(ctx, key, reader, size, oss.PutOptions{
+		ContentType: strings.TrimSpace(contentType),
+	})
+	s.appendOperationLocked("PUT_OBJECT", key, provider.Name, err, started)
+	_ = s.persistLocked()
+	if err != nil {
+		return storedObject{}, err
+	}
+	return mapStoredObject(*provider, info), nil
 }
 
 func (s *Service) openObject(ctx context.Context, providerID, key string) (io.ReadCloser, oss.ObjectInfo, error) {
@@ -868,6 +1017,7 @@ func (s *Service) dashboard() dashboard {
 }
 
 func (s *Service) systemInfo() SystemInfo {
+	hostInfo := collectHostInfo(s.config.StateFile)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	enabled := 0
@@ -896,6 +1046,7 @@ func (s *Service) systemInfo() SystemInfo {
 		Service:              "nav-oss",
 		Version:              oss.Version,
 		GoVersion:            runtime.Version(),
+		Host:                 hostInfo,
 		APIAddress:           apiAddress,
 		ConsoleAddress:       consoleAddress,
 		RuntimeDir:           runtimeDir,

@@ -3,4 +3,4 @@
 package core
 
 // Version is the library version reported to storage providers.
-const Version = "0.1.0"
+const Version = "1.0.0"
