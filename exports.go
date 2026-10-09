@@ -21,6 +21,7 @@ type (
 	ObjectInfo        = core.ObjectInfo
 	ListResult        = core.ListResult
 	MultipartUpload   = core.MultipartUpload
+	MultipartInfo     = core.MultipartInfo
 	CompletedPart     = core.CompletedPart
 	PresignGetOptions = core.PresignGetOptions
 	PresignPutOptions = core.PresignPutOptions
@@ -32,6 +33,7 @@ type (
 	Store             = core.Store
 	Copier            = core.Copier
 	MultipartStore    = core.MultipartStore
+	MultipartLister   = core.MultipartLister
 	Presigner         = core.Presigner
 	Error             = core.Error
 	LocalStore        = localprovider.Store
@@ -49,6 +51,7 @@ const (
 	CapabilityPresignGet       = core.CapabilityPresignGet
 	CapabilityPresignPut       = core.CapabilityPresignPut
 	CapabilityConditionalWrite = core.CapabilityConditionalWrite
+	CapabilityMultipartList    = core.CapabilityMultipartList
 	CredentialStatic           = core.CredentialStatic
 	CredentialEnv              = core.CredentialEnv
 	CredentialIAM              = core.CredentialIAM

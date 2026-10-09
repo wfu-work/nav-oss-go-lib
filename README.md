@@ -18,7 +18,7 @@
 它专注于对象字节和元数据的读写，不侵入用户、权限、目录树、版本、配额等业务模型，适合作为网盘、文档中心、媒体服务和备份系统的底层存储组件。
 
 > [!NOTE]
-> 当前版本为 `v0.1.0`。在 `v1.0.0` 发布前，公共 API 可能根据实际使用反馈进行调整。
+> 当前代码版本为 `v1.0.0`，正式发布状态以仓库 Release / Tag 为准。
 
 ## 特性
 
@@ -30,7 +30,7 @@
 - **稳定错误语义**：使用 `errors.Is` 统一判断不存在、无权限、冲突和临时故障。
 - **安全的本地存储**：防止绝对路径、目录穿越、符号链接逃逸和内部目录访问。
 - **内置展示页面**：通过可选的 `webs` 包直接提供项目主页、能力说明和接入文档。
-- **对象存储软件安装**：可从管理端下载、校验并启动 MinIO 或 RustFS，自动创建 Bucket 和注册存储源。
+- **对象存储软件管理**：可安装 RustFS、自动创建 Bucket 和注册存储源，并管理既有 MinIO / RustFS 实例。
 - **上下文控制**：所有耗时操作均接受 `context.Context`，支持取消与超时。
 
 ## 功能支持
@@ -42,6 +42,7 @@
 | 前缀列举与游标分页 | ✅ | ✅ |
 | 复制与移动 | ✅ | ✅ |
 | Multipart 分片上传 | ✅ | ✅ |
+| 枚举未完成分片会话与进度 | ✅ | ✅ |
 | 自定义元数据 | ✅ | ✅ |
 | Presigned GET / PUT | — | ✅ |
 
@@ -167,7 +168,7 @@ Console 端口会把同源 `/api/` 请求反向代理到 API 端口。API 端口
 直接启动：
 
 ```bash
-go run ./cmd/nav-oss-web
+go run ./cmd
 ```
 
 随后访问 `http://127.0.0.1:9001`，并在登录后通过“个人中心”立即修改默认密码。修改后的密码会以 bcrypt 哈希写入权限为 `0600` 的状态文件，重启服务不会恢复成默认密码，浏览器也不会保存密码。
@@ -177,7 +178,7 @@ go run ./cmd/nav-oss-web
 ```bash
 NAV_OSS_ADMIN_USERNAME=admin \
 NAV_OSS_ADMIN_PASSWORD='replace-with-a-strong-password' \
-go run ./cmd/nav-oss-web
+go run ./cmd
 ```
 
 ### 配置文件
@@ -188,7 +189,7 @@ go run ./cmd/nav-oss-web
 mkdir -p secrets
 printf '%s' 'replace-with-a-strong-password' > secrets/admin-password
 chmod 600 secrets/admin-password
-go run ./cmd/nav-oss-web -config ./nav-oss.json
+go run ./cmd -config ./nav-oss.json
 ```
 
 配置格式：
@@ -215,8 +216,10 @@ go run ./cmd/nav-oss-web -config ./nav-oss.json
 
 | 软件 | Linux amd64 | Linux arm64 | macOS amd64 | macOS arm64 | 下载校验 |
 | --- | :---: | :---: | :---: | :---: | --- |
-| MinIO | ✅ | ✅ | ✅ | ✅ | 官方 SHA256 |
+| MinIO | — | — | — | — | 官方社区版二进制下载已停止 |
 | RustFS | ✅ | ✅ | — | — | 官方 HTTPS 下载并记录本地 SHA256 |
+
+[MinIO 官方下载站](https://dl.min.io/) 当前返回 HTTP 410，声明社区项目已归档并停止提供二进制。因此管理端停用 MinIO 新安装入口并说明原因，已安装实例仍可启动、停止和重启，SDK 仍可连接用户自行部署的 MinIO。CI 使用固定历史版本源码编译隔离实例来验证 S3 兼容性，不依赖已失效的二进制下载地址。
 
 一次安装任务会依次完成：
 
@@ -241,18 +244,27 @@ go run ./cmd/nav-oss-web -config ./nav-oss.json
 - `/api/v1/installations/{id}/{start|stop|restart|retry}`：控制已管理实例的生命周期；
 - `/api/v1/objects`：对象查询、详情、上传、复制、移动、删除和临时签名；
 - `/api/v1/dashboard`：存储规模、健康状态和近期操作概览；
-- `/api/v1/multipart`：当前 Provider 可枚举的 Multipart 会话；
+- `/api/v1/multipart`：所有已启用存储源的未完成分片会话、进度与筛选；
+- `/api/v1/multipart/{id}/parts?providerId=...`：查看指定存储源会话的分片明细；
+- `DELETE /api/v1/multipart/{id}?providerId=...`：终止指定存储源的会话；
 - `/api/v1/operations`：最近的管理操作；
 - `/api/v1/system`：服务版本、系统架构、CPU、内存、应用数据磁盘和运行配置等脱敏信息；
 - `/api/v1/settings`：默认 Provider、分页和临时签名策略。
 
-底层 `Store` 接口暂时没有枚举全部 Multipart 会话的能力，因此 `/api/v1/multipart` 当前返回真实空集合，不使用演示数据。
+Local 和 S3 通过可选的 `MultipartLister` 接口枚举真实会话，包括重启前创建的会话。超过 24 小时未更新的会话标记为疑似停滞；终止只清理未完成分片，不删除同 Key 的完整对象。S3 凭证需要 `s3:ListBucketMultipartUploads` 和 `s3:ListMultipartUploadParts` 权限；查询失败会明确返回错误，概览页会将无法查询的分片数量显示为不可用。
+
+为兼容部分 S3 实现，分片枚举读取 Bucket 的会话列表，再按配置的 `Prefix` 过滤。凭证需要 Bucket 级枚举权限；分片明细查询和返回结果仍只覆盖当前命名空间。
+
+管理端对象列表沿 SDK 游标读取完整存储源，然后进行搜索、全局排序和分页。`maxListPageSize` 限制每次底层读取和管理端返回的页大小，不限制可查询的对象总量。对象数量与容量来自最近一次完整扫描，不受目录前缀和搜索条件影响；存储源有外部变更时，刷新对象列表即可更新统计。海量对象场景应由宿主应用维护索引，避免每次管理查询全量扫描。
 
 `webs` 与 `server` 都是独立可选包。只导入根包、`core`、`local` 或 `s3` 的程序不会启动 HTTP 服务，也不会加载控制台资源。
 
 前端重新构建后同步制品：
 
 ```bash
+cd ../nav-oss-lib-web
+pnpm build:package
+cd ../nav-oss-go-lib
 make web-sync
 make web-verify
 ```
@@ -321,6 +333,8 @@ _, err = oss.Move(
 
 `Move` 按照“先复制、再删除源对象”的顺序执行，并非原子操作。如果目标对象已创建但源对象删除失败，会返回 `ErrPartialFailure`。
 
+源 Key 与目标 Key 相同时，`Move` 会在修改对象前返回 `ErrConflict`，保留原对象。
+
 ### 分片上传
 
 ```go
@@ -352,6 +366,18 @@ info, err := multipart.CompleteMultipart(
 ```
 
 调用方应持久化 `MultipartUpload` 和每个 `CompletedPart`，以便在进程重启后恢复上传。
+
+Local 与 S3 还支持枚举未完成会话及其进度：
+
+```go
+lister, ok := store.(oss.MultipartLister)
+if !ok {
+	return oss.ErrUnsupported
+}
+sessions, err := lister.ListMultipart(ctx, "videos/")
+```
+
+每个 `MultipartInfo` 包含 Upload ID、逻辑 Key、已上传字节数、分片数量和最近更新时间。`MultipartLister` 为可选接口，现有自定义 `Store` 无需修改。
 
 ### Presigned URL
 
@@ -453,7 +479,7 @@ default:
 
 ```text
 nav-oss-go-lib/
-├── cmd/nav-oss-web/      # API 与内置控制台双端口启动命令
+├── cmd/                  # API 与内置控制台双端口启动命令
 ├── core/                 # 公共接口、配置、值对象和错误定义
 ├── factory/              # 根据配置创建 Provider
 ├── local/                # 本地文件系统 Provider
@@ -510,6 +536,24 @@ nav-oss-go-lib/
 5. 在 Pull Request 中说明问题背景、实现方案和兼容性影响。
 
 新增 Provider 时，请实现 `core.Store`，准确声明 `Capabilities()`，并将厂商错误映射到 `core` 中的统一错误类型。
+
+### 验证与 CI
+
+```bash
+make verify       # 单元/回归测试、竞态检测、vet 和构建
+make coverage     # 覆盖率报告
+```
+
+CI 在 Linux 和 macOS 执行检查，并使用隔离的 MinIO 实例验证真实 S3 读写、Range、分页、复制移动、签名和分片生命周期。本地运行集成测试时请使用独立的测试服务：
+
+```bash
+NAV_OSS_TEST_S3_ENDPOINT=http://127.0.0.1:19000 \
+NAV_OSS_TEST_S3_ACCESS_KEY=nav-oss-test \
+NAV_OSS_TEST_S3_SECRET_KEY=nav-oss-test-password \
+go test -race ./s3 -run TestS3Integration -count=1 -v
+```
+
+测试会创建随机名称的测试 Bucket 并在结束后清理，不使用现有 Bucket。
 
 ## 致谢
 

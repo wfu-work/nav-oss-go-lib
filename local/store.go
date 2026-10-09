@@ -82,7 +82,7 @@ func (s *Store) Provider() Provider {
 }
 
 func (s *Store) Capabilities() Capabilities {
-	return Capabilities(CapabilityRangeRead | CapabilityList | CapabilityCopy | CapabilityMultipart)
+	return Capabilities(CapabilityRangeRead | CapabilityList | CapabilityCopy | CapabilityMultipart | CapabilityMultipartList)
 }
 
 func (s *Store) Put(ctx context.Context, key string, reader io.Reader, size int64, options PutOptions) (ObjectInfo, error) {

@@ -1,0 +1,67 @@
+name: Go checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Tests, race detector, vet and build
+        run: make verify
+
+  s3-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build fixed MinIO source for integration tests
+        run: |
+          go mod download github.com/minio/minio@v0.0.0-20250422221226-0d7408fc9969
+          minio_source_dir="$(go env GOMODCACHE)/github.com/minio/minio@v0.0.0-20250422221226-0d7408fc9969"
+          cd "$minio_source_dir"
+          go build -mod=readonly -o "$RUNNER_TEMP/nav-oss-test-minio" .
+      - name: Start isolated MinIO
+        run: |
+          MINIO_ROOT_USER=nav-oss-test MINIO_ROOT_PASSWORD=nav-oss-test-password \
+            "$RUNNER_TEMP/nav-oss-test-minio" server "$RUNNER_TEMP/nav-oss-minio-data" \
+            --address 127.0.0.1:19000 --console-address 127.0.0.1:19001 \
+            > "$RUNNER_TEMP/nav-oss-minio.log" 2>&1 &
+          printf '%s' "$!" > "$RUNNER_TEMP/nav-oss-minio.pid"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:19000/minio/health/ready; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/nav-oss-minio.log"
+          exit 1
+      - name: Verify real S3 operations
+        env:
+          NAV_OSS_TEST_S3_ENDPOINT: http://127.0.0.1:19000
+          NAV_OSS_TEST_S3_ACCESS_KEY: nav-oss-test
+          NAV_OSS_TEST_S3_SECRET_KEY: nav-oss-test-password
+        run: go test -race ./s3 -run TestS3Integration -count=1 -v
+      - name: Stop test service
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/nav-oss-minio.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/nav-oss-minio.pid")" || true
+          fi

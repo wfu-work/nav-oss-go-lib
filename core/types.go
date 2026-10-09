@@ -24,6 +24,7 @@ const (
 	CapabilityPresignGet
 	CapabilityPresignPut
 	CapabilityConditionalWrite
+	CapabilityMultipartList
 )
 
 // Capabilities is a bit set of supported features.
@@ -99,6 +100,14 @@ type MultipartUpload struct {
 	ID        string    `json:"id"`
 	Key       string    `json:"key"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// MultipartInfo describes an incomplete upload without exposing credentials.
+type MultipartInfo struct {
+	MultipartUpload
+	PartCount     int       `json:"partCount"`
+	UploadedBytes int64     `json:"uploadedBytes"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 // CompletedPart identifies one uploaded part.

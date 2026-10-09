@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -82,7 +83,12 @@ func (s *Service) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 			writeMethodNotAllowed(writer, http.MethodGet)
 			return
 		}
-		writeSuccess(writer, s.dashboard())
+		result, err := s.dashboard(request.Context())
+		if err != nil {
+			writeAppError(writer, err)
+			return
+		}
+		writeSuccess(writer, result)
 	case path == apiPrefix+"/system":
 		if request.Method != http.MethodGet {
 			writeMethodNotAllowed(writer, http.MethodGet)
@@ -122,7 +128,7 @@ func (s *Service) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	case path == apiPrefix+"/multipart":
 		s.handleMultipart(writer, request)
 	case strings.HasPrefix(path, apiPrefix+"/multipart/"):
-		s.handleMultipartItem(writer, request, strings.TrimPrefix(path, apiPrefix+"/multipart/"))
+		s.handleMultipartItem(writer, request, strings.TrimPrefix(strings.TrimSuffix(request.URL.EscapedPath(), "/"), apiPrefix+"/multipart/"))
 	case path == apiPrefix+"/operations":
 		s.handleOperations(writer, request)
 	case path == apiPrefix+"/settings":
@@ -259,6 +265,7 @@ func (s *Service) handleObjects(writer http.ResponseWriter, request *http.Reques
 	case http.MethodGet:
 		page, size := pageQuery(request)
 		query := request.URL.Query()
+		size, _ = strconv.Atoi(query.Get("size"))
 		result, err := s.listObjects(
 			request.Context(),
 			query.Get("providerId"),
@@ -443,17 +450,37 @@ func (s *Service) handleMultipart(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	page, size := pageQuery(request)
-	writeSuccess(writer, pageResult[any]{Data: []any{}, Total: 0, Page: page, Size: size})
+	query := request.URL.Query()
+	result, err := s.multipartSessions(request.Context(), query.Get("providerId"), query.Get("keyword"), query.Get("status"), page, size)
+	if err != nil {
+		writeAppError(writer, err)
+		return
+	}
+	writeSuccess(writer, result)
 }
 
 func (s *Service) handleMultipartItem(writer http.ResponseWriter, request *http.Request, suffix string) {
 	parts := strings.Split(suffix, "/")
+	uploadID, err := url.PathUnescape(parts[0])
+	if err != nil || uploadID == "" {
+		writeAppError(writer, errors.New("Upload ID 无效"))
+		return
+	}
 	if len(parts) == 2 && parts[1] == "parts" && request.Method == http.MethodGet {
-		writeSuccess(writer, []any{})
+		result, err := s.multipartParts(request.Context(), request.URL.Query().Get("providerId"), uploadID)
+		if err != nil {
+			writeAppError(writer, err)
+			return
+		}
+		writeSuccess(writer, result)
 		return
 	}
 	if len(parts) == 1 && request.Method == http.MethodDelete {
-		writeAppError(writer, errors.New("底层 Provider 未提供 Multipart 会话枚举，无法按 ID 终止未知会话"))
+		if err := s.abortMultipart(request.Context(), request.URL.Query().Get("providerId"), uploadID); err != nil {
+			writeAppError(writer, err)
+			return
+		}
+		writeSuccess(writer, true)
 		return
 	}
 	writeNotFound(writer)

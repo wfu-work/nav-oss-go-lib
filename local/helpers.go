@@ -17,15 +17,17 @@ type (
 	ObjectInfo      = core.ObjectInfo
 	ListResult      = core.ListResult
 	MultipartUpload = core.MultipartUpload
+	MultipartInfo   = core.MultipartInfo
 	CompletedPart   = core.CompletedPart
 )
 
 const (
-	ProviderLocal       = core.ProviderLocal
-	CapabilityRangeRead = core.CapabilityRangeRead
-	CapabilityList      = core.CapabilityList
-	CapabilityCopy      = core.CapabilityCopy
-	CapabilityMultipart = core.CapabilityMultipart
+	ProviderLocal           = core.ProviderLocal
+	CapabilityRangeRead     = core.CapabilityRangeRead
+	CapabilityList          = core.CapabilityList
+	CapabilityCopy          = core.CapabilityCopy
+	CapabilityMultipart     = core.CapabilityMultipart
+	CapabilityMultipartList = core.CapabilityMultipartList
 
 	internalDirName    = ossutil.InternalDirName
 	internalTempPrefix = ossutil.InternalTempPrefix

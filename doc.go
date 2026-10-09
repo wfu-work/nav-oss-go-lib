@@ -7,11 +7,13 @@
 package oss
 
 var (
-	_ Store          = (*LocalStore)(nil)
-	_ Copier         = (*LocalStore)(nil)
-	_ MultipartStore = (*LocalStore)(nil)
-	_ Store          = (*S3Store)(nil)
-	_ Copier         = (*S3Store)(nil)
-	_ MultipartStore = (*S3Store)(nil)
-	_ Presigner      = (*S3Store)(nil)
+	_ Store           = (*LocalStore)(nil)
+	_ Copier          = (*LocalStore)(nil)
+	_ MultipartStore  = (*LocalStore)(nil)
+	_ MultipartLister = (*LocalStore)(nil)
+	_ Store           = (*S3Store)(nil)
+	_ Copier          = (*S3Store)(nil)
+	_ MultipartStore  = (*S3Store)(nil)
+	_ MultipartLister = (*S3Store)(nil)
+	_ Presigner       = (*S3Store)(nil)
 )

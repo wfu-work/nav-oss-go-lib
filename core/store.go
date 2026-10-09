@@ -35,6 +35,12 @@ type MultipartStore interface {
 	AbortMultipart(ctx context.Context, upload MultipartUpload) error
 }
 
+// MultipartLister optionally exposes incomplete uploads and their progress.
+// Prefix uses logical object keys, just like Store.List.
+type MultipartLister interface {
+	ListMultipart(ctx context.Context, prefix string) ([]MultipartInfo, error)
+}
+
 // Presigner is implemented by providers that can create temporary HTTP URLs.
 type Presigner interface {
 	PresignGet(ctx context.Context, key string, options PresignGetOptions) (*url.URL, error)
@@ -44,6 +50,9 @@ type Presigner interface {
 // Move copies then deletes an object. It is intentionally not presented as an
 // atomic operation because object stores generally cannot guarantee that.
 func Move(ctx context.Context, store Store, sourceKey, targetKey string, options CopyOptions) (ObjectInfo, error) {
+	if sourceKey == targetKey {
+		return ObjectInfo{}, newError("move", store.Provider(), sourceKey, ErrConflict, nil)
+	}
 	copier, ok := store.(Copier)
 	if !ok {
 		return ObjectInfo{}, newError("move", store.Provider(), sourceKey, ErrUnsupported, nil)

@@ -19,30 +19,32 @@ type (
 	ObjectInfo        = core.ObjectInfo
 	ListResult        = core.ListResult
 	MultipartUpload   = core.MultipartUpload
+	MultipartInfo     = core.MultipartInfo
 	CompletedPart     = core.CompletedPart
 	PresignGetOptions = core.PresignGetOptions
 	PresignPutOptions = core.PresignPutOptions
 )
 
 const (
-	ProviderS3           = core.ProviderS3
-	CapabilityRangeRead  = core.CapabilityRangeRead
-	CapabilityList       = core.CapabilityList
-	CapabilityCopy       = core.CapabilityCopy
-	CapabilityMultipart  = core.CapabilityMultipart
-	CapabilityPresignGet = core.CapabilityPresignGet
-	CapabilityPresignPut = core.CapabilityPresignPut
-	CredentialStatic     = core.CredentialStatic
-	CredentialEnv        = core.CredentialEnv
-	CredentialIAM        = core.CredentialIAM
-	CredentialAnonymous  = core.CredentialAnonymous
-	BucketLookupAuto     = core.BucketLookupAuto
-	BucketLookupDNS      = core.BucketLookupDNS
-	BucketLookupPath     = core.BucketLookupPath
-	maxMultipartParts    = ossutil.MaxMultipartParts
-	minS3PartSize        = ossutil.MinS3PartSize
-	maxS3PartSize        = ossutil.MaxS3PartSize
-	Version              = core.Version
+	ProviderS3              = core.ProviderS3
+	CapabilityRangeRead     = core.CapabilityRangeRead
+	CapabilityList          = core.CapabilityList
+	CapabilityCopy          = core.CapabilityCopy
+	CapabilityMultipart     = core.CapabilityMultipart
+	CapabilityMultipartList = core.CapabilityMultipartList
+	CapabilityPresignGet    = core.CapabilityPresignGet
+	CapabilityPresignPut    = core.CapabilityPresignPut
+	CredentialStatic        = core.CredentialStatic
+	CredentialEnv           = core.CredentialEnv
+	CredentialIAM           = core.CredentialIAM
+	CredentialAnonymous     = core.CredentialAnonymous
+	BucketLookupAuto        = core.BucketLookupAuto
+	BucketLookupDNS         = core.BucketLookupDNS
+	BucketLookupPath        = core.BucketLookupPath
+	maxMultipartParts       = ossutil.MaxMultipartParts
+	minS3PartSize           = ossutil.MinS3PartSize
+	maxS3PartSize           = ossutil.MaxS3PartSize
+	Version                 = core.Version
 )
 
 var (

@@ -22,6 +22,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	oss "github.com/wfu-work/nav-oss-go-lib"
+	"github.com/wfu-work/nav-oss-go-lib/internal/ossutil"
 )
 
 const (
@@ -75,6 +76,7 @@ type dashboard struct {
 	UsedBytes            int64       `json:"usedBytes"`
 	MultipartCount       int         `json:"multipartCount"`
 	StaleMultipartCount  int         `json:"staleMultipartCount"`
+	MultipartError       string      `json:"multipartError,omitempty"`
 	FailedOperationCount int         `json:"failedOperationCount"`
 	Providers            []Provider  `json:"providers"`
 	RecentOperations     []Operation `json:"recentOperations"`
@@ -207,6 +209,7 @@ func (s *Service) applySettingsDefaults() {
 	if s.state.Settings.MaxListPageSize <= 0 {
 		s.state.Settings.MaxListPageSize = 1000
 	}
+	s.state.Settings.ListPageSize = min(s.state.Settings.ListPageSize, s.state.Settings.MaxListPageSize)
 	if !s.state.Settings.RequireDeleteConfirmation {
 		// A newly created zero-value state should use the safer default.
 		s.state.Settings.RequireDeleteConfirmation = len(s.state.Providers) == 0
@@ -620,47 +623,92 @@ func (s *Service) resolveProviderLocked(id string) (*providerState, oss.Store, e
 }
 
 func (s *Service) listObjects(ctx context.Context, providerID, prefix, keyword, sortBy, sortOrder string, page, size int) (pageResult[storedObject], error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	provider, store, err := s.resolveProviderLocked(providerID)
-	if err != nil {
+	if err := ossutil.ValidatePrefix(prefix); err != nil {
 		return pageResult[storedObject]{}, err
 	}
-	started := time.Now()
-	limit := s.state.Settings.MaxListPageSize
-	if limit <= 0 {
-		limit = 1000
-	}
-	result, err := store.List(ctx, oss.ListOptions{Prefix: prefix, Limit: limit, Recursive: true})
-	s.appendOperationLocked("LIST_OBJECTS", prefix, provider.Name, err, started)
+	s.mu.Lock()
+	provider, store, err := s.resolveProviderLocked(providerID)
 	if err != nil {
+		s.mu.Unlock()
+		return pageResult[storedObject]{}, err
+	}
+	snapshot := *provider
+	settings := s.state.Settings
+	s.mu.Unlock()
+	if size <= 0 {
+		size = settings.ListPageSize
+	}
+	size = min(size, settings.MaxListPageSize)
+	started := time.Now()
+	objects, err := listAllObjects(ctx, store, settings.MaxListPageSize)
+	if err != nil {
+		s.mu.Lock()
+		s.appendOperationLocked("LIST_OBJECTS", prefix, snapshot.Name, err, started)
 		_ = s.persistLocked()
+		s.mu.Unlock()
 		return pageResult[storedObject]{}, err
 	}
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
-	items := make([]storedObject, 0, len(result.Items))
+	items := make([]storedObject, 0, len(objects))
 	var usedBytes int64
 	var objectCount int64
-	for _, item := range result.Items {
-		if keyword != "" && !strings.Contains(strings.ToLower(item.Key), keyword) {
-			continue
-		}
-		items = append(items, mapStoredObject(*provider, item))
+	for _, item := range objects {
 		if !item.IsPrefix {
 			objectCount++
 			usedBytes += item.Size
 		}
+		if strings.HasPrefix(item.Key, prefix) && (keyword == "" || strings.Contains(strings.ToLower(item.Key), keyword)) {
+			items = append(items, mapStoredObject(snapshot, item))
+		}
 	}
-	provider.ObjectCount = objectCount
-	provider.UsedBytes = usedBytes
-	provider.UpdatedAt = time.Now().UTC()
 	sortStoredObjects(items, sortBy, sortOrder)
 	pageValue := paginate(items, page, size)
 	hydrateMissingContentTypes(ctx, store, pageValue.Data)
-	pageValue.NextCursor = result.NextCursor
-	pageValue.HasMore = result.HasMore || pageValue.HasMore
-	_ = s.persistLocked()
+	if err = ctx.Err(); err != nil {
+		return pageResult[storedObject]{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// A provider may have been reconfigured while the scan was in progress.
+	if index := s.providerIndexLocked(snapshot.ID); index >= 0 && s.stores[snapshot.ID] == store {
+		s.state.Providers[index].ObjectCount = objectCount
+		s.state.Providers[index].UsedBytes = usedBytes
+		s.state.Providers[index].UpdatedAt = time.Now().UTC()
+	}
+	s.appendOperationLocked("LIST_OBJECTS", prefix, snapshot.Name, nil, started)
+	if err = s.persistLocked(); err != nil {
+		return pageResult[storedObject]{}, err
+	}
 	return pageValue, nil
+}
+
+// The console supports arbitrary sorting and exact totals, so it must consume
+// all SDK pages before filtering and applying its page-number pagination.
+func listAllObjects(ctx context.Context, store oss.Store, batchSize int) ([]oss.ObjectInfo, error) {
+	items := make([]oss.ObjectInfo, 0)
+	cursor := ""
+	seen := make(map[string]bool)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if seen[cursor] {
+			return nil, errors.New("Provider 返回了不前进的对象列表游标")
+		}
+		seen[cursor] = true
+		result, err := store.List(ctx, oss.ListOptions{Cursor: cursor, Limit: batchSize, Recursive: true})
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, result.Items...)
+		if !result.HasMore {
+			return items, nil
+		}
+		if result.NextCursor == "" || len(result.Items) == 0 {
+			return nil, errors.New("Provider 返回了无效的对象列表游标")
+		}
+		cursor = result.NextCursor
+	}
 }
 
 func normalizeObjectSortField(value string) string {
@@ -980,7 +1028,18 @@ func mapObjectDetail(provider providerState, info oss.ObjectInfo) objectDetail {
 	}
 }
 
-func (s *Service) dashboard() dashboard {
+func (s *Service) dashboard(ctx context.Context) (dashboard, error) {
+	sessions, err := s.listMultipartSessions(ctx, "")
+	multipartError := ""
+	if err != nil {
+		multipartError = err.Error()
+	}
+	stale := 0
+	for _, session := range sessions {
+		if session.Status == "stale" {
+			stale++
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	providers := make([]Provider, 0, len(s.state.Providers))
@@ -1013,7 +1072,9 @@ func (s *Service) dashboard() dashboard {
 		ProviderCount: len(providers), HealthyProviderCount: healthy, ObjectCount: objectCount,
 		UsedBytes: usedBytes, FailedOperationCount: failed, Providers: providers,
 		RecentOperations: recent, UpdatedAt: time.Now().UTC(),
-	}
+		MultipartCount: len(sessions), StaleMultipartCount: stale,
+		MultipartError: multipartError,
+	}, nil
 }
 
 func (s *Service) systemInfo() SystemInfo {
@@ -1095,6 +1156,9 @@ func (s *Service) saveSettings(settings Settings) (Settings, error) {
 	if settings.ListPageSize < 10 || settings.ListPageSize > 200 || settings.MaxListPageSize < 100 || settings.MaxListPageSize > 1000 {
 		return Settings{}, errors.New("对象列表分页配置超出允许范围")
 	}
+	if settings.ListPageSize > settings.MaxListPageSize {
+		return Settings{}, errors.New("默认分页大小不能超过最大分页大小")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if settings.DefaultProviderID != "" && s.providerIndexLocked(settings.DefaultProviderID) < 0 {
@@ -1141,9 +1205,10 @@ func paginate[T any](items []T, page, size int) pageResult[T] {
 	if size > 1000 {
 		size = 1000
 	}
-	start := (page - 1) * size
-	if start > len(items) {
-		start = len(items)
+	start := len(items)
+	// Compare before multiplying so even a very large page cannot overflow.
+	if page-1 <= len(items)/size {
+		start = (page - 1) * size
 	}
 	end := start + size
 	if end > len(items) {

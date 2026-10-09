@@ -14,7 +14,7 @@ test-race:
 vet:
 	go vet ./...
 
-verify: test test-race vet
+verify: test test-race vet web-verify
 
 coverage:
 	go test -coverprofile=coverage.out ./...
@@ -24,7 +24,7 @@ web-sync:
 	./scripts/sync-webs.sh "$(WEB_ZIP)"
 
 web-run:
-	go run ./cmd/nav-oss-web -api-addr "$(WEB_API_ADDR)" -console-addr "$(WEB_CONSOLE_ADDR)" $(if $(WEB_CONFIG),-config "$(WEB_CONFIG)")
+	go run ./cmd -api-addr "$(WEB_API_ADDR)" -console-addr "$(WEB_CONSOLE_ADDR)" $(if $(WEB_CONFIG),-config "$(WEB_CONFIG)")
 
 web-verify:
 	go build ./...

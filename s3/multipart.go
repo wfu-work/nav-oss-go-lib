@@ -42,20 +42,30 @@ func (s *Store) UploadPart(ctx context.Context, upload MultipartUpload, partNumb
 
 // ListParts returns every uploaded S3 part in ascending order.
 func (s *Store) ListParts(ctx context.Context, upload MultipartUpload) ([]CompletedPart, error) {
+	actual, err := s.listS3Parts(ctx, upload)
+	if err != nil {
+		return nil, err
+	}
+	parts := make([]CompletedPart, 0, len(actual))
+	for _, part := range actual {
+		parts = append(parts, CompletedPart{PartNumber: part.PartNumber, ETag: normalizeETag(part.ETag), Size: part.Size})
+	}
+	return parts, nil
+}
+
+func (s *Store) listS3Parts(ctx context.Context, upload MultipartUpload) ([]minio.ObjectPart, error) {
 	object, err := s.s3MultipartObject(upload)
 	if err != nil {
 		return nil, err
 	}
-	parts := make([]CompletedPart, 0)
+	parts := make([]minio.ObjectPart, 0)
 	marker := 0
 	for {
 		result, listErr := s.core.ListObjectParts(ctx, s.bucket, object, upload.ID, marker, 1000)
 		if listErr != nil {
 			return nil, mapS3Error("list-parts", upload.Key, listErr)
 		}
-		for _, part := range result.ObjectParts {
-			parts = append(parts, CompletedPart{PartNumber: part.PartNumber, ETag: normalizeETag(part.ETag), Size: part.Size})
-		}
+		parts = append(parts, result.ObjectParts...)
 		if !result.IsTruncated {
 			break
 		}

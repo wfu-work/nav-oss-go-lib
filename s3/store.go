@@ -17,7 +17,8 @@ import (
 )
 
 const (
-	maxPresignTTL = 7 * 24 * time.Hour
+	maxPresignTTL     = 7 * 24 * time.Hour
+	maxSingleCopySize = int64(5 << 30)
 )
 
 // Store stores objects in Amazon S3 or an S3-compatible service.
@@ -113,7 +114,7 @@ func (s *Store) Provider() Provider {
 }
 
 func (s *Store) Capabilities() Capabilities {
-	return Capabilities(CapabilityRangeRead | CapabilityList | CapabilityCopy | CapabilityMultipart | CapabilityPresignGet | CapabilityPresignPut)
+	return Capabilities(CapabilityRangeRead | CapabilityList | CapabilityCopy | CapabilityMultipart | CapabilityMultipartList | CapabilityPresignGet | CapabilityPresignPut)
 }
 
 func (s *Store) Put(ctx context.Context, key string, reader io.Reader, size int64, options PutOptions) (ObjectInfo, error) {
@@ -299,8 +300,13 @@ func (s *Store) Copy(ctx context.Context, sourceKey, targetKey string, options C
 		CacheControl:       sourceInfo.CacheControl,
 		PartSize:           s.partSize,
 	}
-	source := minio.CopySrcOptions{Bucket: s.bucket, Object: sourceObject, Start: -1, End: -1}
-	if _, err = s.client.ComposeObject(ctx, destination, source); err != nil {
+	source := minio.CopySrcOptions{Bucket: s.bucket, Object: sourceObject}
+	if sourceInfo.Size <= maxSingleCopySize {
+		_, err = s.client.CopyObject(ctx, destination, source)
+	} else {
+		_, err = s.client.ComposeObject(ctx, destination, source)
+	}
+	if err != nil {
 		return ObjectInfo{}, mapS3Error("copy", sourceKey, err)
 	}
 	return s.Stat(ctx, targetKey)

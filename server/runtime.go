@@ -79,7 +79,7 @@ func runtimeDefinitions() []runtimeDefinition {
 		{
 			Catalog: RuntimeCatalogItem{
 				ID: "minio", Name: "MinIO", License: "AGPL-3.0",
-				Description:    "成熟的 S3 兼容对象存储，适合单机开发和生产部署。",
+				Description:    "支持接入和管理已有 MinIO 实例；官方社区版二进制下载已停止。",
 				DefaultAPIPort: 9100, DefaultConsolePort: 9101,
 				Verification: "官方 SHA256", Platforms: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"},
 			},
@@ -126,14 +126,9 @@ func runtimeDefinitionFor(software string) (runtimeDefinition, error) {
 }
 
 func minioDownloadURL() (string, string, error) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		return "", "", fmt.Errorf("MinIO 一键安装暂不支持 %s", runtime.GOOS)
-	}
-	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
-		return "", "", fmt.Errorf("MinIO 一键安装暂不支持 %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
-	base := fmt.Sprintf("https://dl.min.io/server/minio/release/%s-%s/minio", runtime.GOOS, runtime.GOARCH)
-	return base, base + ".sha256sum", nil
+	// The official download service returns HTTP 410 for all community builds.
+	// Existing binaries remain manageable through start/stop/restart.
+	return "", "", errors.New("MinIO 官方已停止提供社区版二进制下载；请连接自行部署的 MinIO，或在 Linux 上安装 RustFS")
 }
 
 func rustFSDownloadURL() (string, string, error) {
